@@ -70,6 +70,15 @@
         arr.push({ label, value: normalizeValue(String(value)) });
     }
 
+    // Defensively coerce a field that might be a string OR an object like
+    // { id: 2, name: "Home" } into plain text.
+    function asText(val) {
+        if (val === null || val === undefined) return '';
+        if (typeof val === 'string' || typeof val === 'number') return String(val);
+        if (typeof val === 'object') return val.name || val.label || val.value || '';
+        return '';
+    }
+
     // ── !! VERIFY: adjust RELAY_URL to your own Redtail relay endpoint once built ──
     const RELAY_URL = 'https://redtail-jotform-sync.vercel.app/api/relay';
 
@@ -115,7 +124,7 @@
                         const zip     = addr.zip   || '';
                         const country = (addr.country && addr.country.trim()) ? addr.country.trim() : 'United States';
                         const flat    = `${street1}, ${city}, ${state} ${zip}`;
-                        const kind    = (addr.address_type || '').toLowerCase();
+                        const kind    = (asText(addr.address_type)).toLowerCase();
 
                         const targets = [];
                         if (kind === 'home') targets.push(pfx('Home Address'));
@@ -145,7 +154,7 @@
                     contact.phones.forEach(p => {
                         const num  = p.number;
                         if (!num) return;
-                        const kind = (p.phone_type || '').toLowerCase();
+                        const kind = (asText(p.phone_type)).toLowerCase();
 
                         if (kind === 'mobile') {
                             mobileCount++;
@@ -189,11 +198,24 @@
                 if (contact.status_name)
                     push(finalFields, pfx('Status'), contact.status_name);
 
+                if (contact.gender) {
+                    push(finalFields, pfx('Gender'), contact.gender);
+                    push(finalFields, pfx('Sex'), contact.gender);
+                }
+                if (contact.marital_status) {
+                    push(finalFields, pfx('Marital Status'), contact.marital_status);
+                    push(finalFields, pfx('Marital'), contact.marital_status);
+                }
+
                 if (contact.tags?.length > 0)
                     push(finalFields, pfx('Tags'), contact.tags.map(t => t.name || t).join(', '));
 
                 // ── 4. TOP-LEVEL TEXT FIELDS ──────────────────────────────────
+                // Skip the raw *_id numeric fields here — they're not useful
+                // to prefill directly, only their mapped text versions above.
+                const SKIP_KEYS = new Set(['gender_id', 'marital_status_id']);
                 for (let key in contact) {
+                    if (SKIP_KEYS.has(key)) continue;
                     const value = contact[key];
                     if (value && typeof value !== 'object' && value !== '') {
                         const cleanKey = key.replace(/_/g, ' ');
