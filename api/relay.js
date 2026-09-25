@@ -1,10 +1,10 @@
 // api/relay.js
-// VERSION: 2026-09-25-v4 (raw key, no client-side base64 encoding)
+// VERSION: 2026-09-25-v5 (raw key as Authorization header, no scheme/encoding)
 //
 // Vercel serverless function that looks up a Redtail contact by ID and
 // returns clean JSON for the JotForm widget to consume.
 //
-// Usage: POST /api/relay  with JSON body { "value": "12345", "key": "APIKey:Password" }
+// Usage: POST /api/relay  with JSON body { "value": "12345", "key": "YOUR_REDTAIL_KEY" }
 //
 // The Redtail credentials come from the JotForm widget's own settings
 // (filled in per-form by whoever builds it in JotForm's widget builder),
@@ -13,8 +13,6 @@
 // server access log.
 
 const REDTAIL_BASE = 'https://smf.crm3.redtailtechnology.com/api/public/v1';
-// !! VERIFY: "smf" is your firm's Redtail subdomain, taken from the bulk-
-// updater project. Confirm this is still correct before relying on it.
 
 export default async function handler(req, res) {
   // CORS — JotForm embeds run on jotform.com / jotform domains
@@ -50,9 +48,10 @@ export default async function handler(req, res) {
   // TEMPORARY DEBUG — remove once auth is working.
   console.log('DEBUG key received — length:', key.length);
 
-  // TESTING: sending the key AS-IS (no re-encoding), in case Redtail issues
-  // API keys that are already Base64 — re-encoding would double-encode it.
-  const authHeader = `Userkey ${key}`;
+  // Confirmed from a working integration: the key goes directly into the
+  // Authorization header, unmodified — no "Userkey"/"Basic" scheme prefix,
+  // no Base64 encoding.
+  const authHeader = key;
 
   try {
     const rtRes = await fetch(`${REDTAIL_BASE}/contacts/${contactId}`, {
@@ -60,6 +59,7 @@ export default async function handler(req, res) {
       headers: {
         Authorization: authHeader,
         Accept: 'application/json',
+        include: 'emails,addresses,phones,family,family.members',
       },
     });
 
@@ -69,7 +69,7 @@ export default async function handler(req, res) {
       res.status(rtRes.status).json({
         error: `Redtail returned HTTP ${rtRes.status}`,
         detail: text.slice(0, 500),
-        _version: '2026-09-25-v4',
+        _version: '2026-09-25-v5',
       });
       return;
     }
