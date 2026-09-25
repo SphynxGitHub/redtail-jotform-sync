@@ -1,4 +1,5 @@
 // api/relay.js
+// VERSION: 2026-09-25-v3 (raw API key, no colon pairing)
 //
 // Vercel serverless function that looks up a Redtail contact by ID and
 // returns clean JSON for the JotForm widget to consume.
@@ -69,6 +70,7 @@ export default async function handler(req, res) {
       res.status(rtRes.status).json({
         error: `Redtail returned HTTP ${rtRes.status}`,
         detail: text.slice(0, 500),
+        _version: '2026-09-25-v3',
       });
       return;
     }
