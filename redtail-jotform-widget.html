@@ -274,6 +274,7 @@
                 }
 
                 JFCustomWidget.setFieldsValueByLabel(finalFields);
+                console.log('DEBUG finalFields sent to JotForm:', JSON.stringify(finalFields, null, 2));
                 JFCustomWidget.sendData(fullLegalName);
             })
             .catch(err => {
