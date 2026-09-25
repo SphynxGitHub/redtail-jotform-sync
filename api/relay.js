@@ -1,5 +1,5 @@
 // api/relay.js
-// VERSION: 2026-09-25-v11 (real gender/marital-status lookups, drop wrong hardcoded map)
+// VERSION: 2026-09-25-v12 (robust list parser ported from bulk-updater; fixed anniversary field name)
 //
 // Vercel serverless function that looks up a Redtail contact by ID and
 // returns clean JSON for the JotForm widget to consume.
@@ -54,12 +54,64 @@ export default async function handler(req, res) {
   const authHeader = key;
 
   // ── Lookup lists ────────────────────────────────────────────────────────
-  // Address/phone "type" fields come back as raw numeric IDs, and those IDs
-  // are account-specific (not fixed system values), so we fetch Redtail's
-  // own lookup lists instead of guessing a mapping. The exact endpoint path
-  // isn't documented publicly, so we try several plausible names and use
-  // whichever one actually returns data — _debug_lookup_attempts in the
-  // response shows what was tried and what each one returned.
+  // Address/phone/gender/marital "type" fields come back as account-specific
+  // numerical IDs, so we fetch Redtail's own lookup lists instead of
+  // guessing a mapping. Parsing logic ported from your working bulk-updater
+  // project (findObjectArray_ / toItem_), which handles Redtail's varying
+  // response shapes (nested wrapper keys, different id/name field names,
+  // or a flat {"1":"Active"} map) far more reliably than a single guess.
+
+  /** Finds the first array of objects anywhere in the response (up to 3 levels deep). */
+  function findObjectArray(v, depth) {
+    if (v === null || v === undefined || depth > 3) return null;
+    if (Array.isArray(v)) {
+      return (v.length && v[0] !== null && typeof v[0] === 'object' && !Array.isArray(v[0])) ? v : null;
+    }
+    if (typeof v !== 'object') return null;
+    const keys = Object.keys(v);
+    const preferred = ['data', 'items', 'results', 'list', 'values'];
+    const ordered = preferred.filter(k => keys.includes(k)).concat(keys.filter(k => !preferred.includes(k)));
+    for (const k of ordered) {
+      const hit = findObjectArray(v[k], depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  /** Turns one list entry into { id, name }, tolerating different property names. */
+  function toItem(o) {
+    let id = null;
+    for (const k of ['id', 'value', 'code', 'key', 'list_id']) {
+      if (typeof o[k] === 'number' || (typeof o[k] === 'string' && o[k] !== '')) { id = o[k]; break; }
+    }
+    if (id === null) {
+      for (const k of Object.keys(o)) {
+        if (/(^|_)id$/i.test(k) && typeof o[k] === 'number') { id = o[k]; break; }
+      }
+    }
+    let name = null;
+    for (const k of ['name', 'description', 'label', 'display_name', 'displayName', 'title', 'text', 'full_name']) {
+      if (typeof o[k] === 'string' && o[k].trim()) { name = o[k]; break; }
+    }
+    if (id === null || name === null) return null;
+    return { id, name: String(name).trim() };
+  }
+
+  function extractItems(body) {
+    const arr = findObjectArray(body, 0);
+    if (arr) return arr.map(toItem).filter(Boolean);
+    if (body && typeof body === 'object' && !Array.isArray(body)) {
+      const keys = Object.keys(body);
+      if (keys.length && keys.every(k => typeof body[k] === 'string' || typeof body[k] === 'number')) {
+        const numericKeys = keys.every(k => /^\d+$/.test(k));
+        return keys.map(k => numericKeys
+          ? { id: Number(k), name: String(body[k]).trim() }
+          : { id: body[k], name: k });
+      }
+    }
+    return [];
+  }
+
   async function tryLookupPaths(paths) {
     const attempts = [];
     for (const path of paths) {
@@ -72,20 +124,12 @@ export default async function handler(req, res) {
           continue;
         }
         const j = await r.json();
-        const arr = Array.isArray(j) ? j
-          : j.phone_types || j.address_types || j.contact_phone_types
-          || j.contact_address_types || j.lists || j.data || [];
+        const items = extractItems(j);
         const map = {};
-        for (const item of (Array.isArray(arr) ? arr : [])) {
-          const id = item.id ?? item.value;
-          const label = item.name ?? item.label ?? item.text;
-          if (id !== undefined && label) map[id] = label;
-        }
-        const mapSize = Object.keys(map).length;
-        attempts.push({ path, status: r.status, ok: true, mapSize, sampleKeys: Object.keys(j).slice(0, 5) });
-        if (mapSize > 0) {
-          return { map, attempts };
-        }
+        for (const it of items) map[it.id] = it.name;
+        const mapSize = items.length;
+        attempts.push({ path, status: r.status, ok: true, mapSize, sampleKeys: Object.keys(j).slice(0, 8) });
+        if (mapSize > 0) return { map, attempts };
       } catch (e) {
         attempts.push({ path, error: String(e) });
       }
@@ -133,7 +177,7 @@ export default async function handler(req, res) {
       res.status(rtRes.status).json({
         error: `Redtail returned HTTP ${rtRes.status}`,
         detail: text.slice(0, 500),
-        _version: '2026-09-25-v11',
+        _version: '2026-09-25-v12',
       });
       return;
     }
@@ -207,7 +251,7 @@ export default async function handler(req, res) {
       nickname: asText(contact.nickname),
       dob: asText(contact.dob) || asText(contact.date_of_birth) || asText(contact.birthdate),
       client_since: asText(contact.client_since) || asText(contact.clientSince) || asText(contact.date_became_client),
-      anniversary: asText(contact.anniversary) || asText(contact.anniversary_date) || asText(contact.marital_anniversary) || asText(contact.wedding_anniversary),
+      anniversary: asText(contact.marital_date) || asText(contact.anniversary) || asText(contact.anniversary_date),
       addresses: (contact.addresses || []).map(a => {
         const rawType = a.address_type ?? a.type ?? a.kind;
         const typeId = asId(rawType);
