@@ -1,5 +1,5 @@
 // api/relay.js
-// VERSION: 2026-09-25-v8 (dynamic phone/address type lookup from Redtail lists)
+// VERSION: 2026-09-25-v9 (added dob, client_since, anniversary, nickname passthrough)
 //
 // Vercel serverless function that looks up a Redtail contact by ID and
 // returns clean JSON for the JotForm widget to consume.
@@ -104,7 +104,7 @@ export default async function handler(req, res) {
       res.status(rtRes.status).json({
         error: `Redtail returned HTTP ${rtRes.status}`,
         detail: text.slice(0, 500),
-        _version: '2026-09-25-v8',
+        _version: '2026-09-25-v9',
       });
       return;
     }
@@ -177,6 +177,10 @@ export default async function handler(req, res) {
       gender_id: genderId,
       marital_status: maritalText,
       marital_status_id: maritalId,
+      nickname: asText(contact.nickname),
+      dob: asText(contact.dob) || asText(contact.date_of_birth) || asText(contact.birthdate),
+      client_since: asText(contact.client_since) || asText(contact.clientSince) || asText(contact.date_became_client),
+      anniversary: asText(contact.anniversary) || asText(contact.anniversary_date) || asText(contact.marital_anniversary) || asText(contact.wedding_anniversary),
       addresses: (contact.addresses || []).map(a => {
         const rawType = a.address_type ?? a.type ?? a.kind;
         const typeId = asId(rawType);
