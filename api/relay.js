@@ -1,5 +1,5 @@
 // api/relay.js
-// VERSION: 2026-09-25-v9 (added dob, client_since, anniversary, nickname passthrough)
+// VERSION: 2026-09-25-v11 (real gender/marital-status lookups, drop wrong hardcoded map)
 //
 // Vercel serverless function that looks up a Redtail contact by ID and
 // returns clean JSON for the JotForm widget to consume.
@@ -56,37 +56,66 @@ export default async function handler(req, res) {
   // ── Lookup lists ────────────────────────────────────────────────────────
   // Address/phone "type" fields come back as raw numeric IDs, and those IDs
   // are account-specific (not fixed system values), so we fetch Redtail's
-  // own lookup lists instead of guessing a mapping. Fetched fresh per
-  // request — small lists, cheap call, always accurate even if the account
-  // customizes them later.
-  async function fetchLookup(path) {
-    try {
-      const r = await fetch(`${REDTAIL_BASE}${path}`, {
-        headers: { Authorization: authHeader, Accept: 'application/json' },
-      });
-      if (!r.ok) return {};
-      const j = await r.json();
-      // Response shape varies by list — try common wrapper keys, else
-      // assume the body itself is the array.
-      const arr = Array.isArray(j) ? j
-        : j.phone_types || j.address_types || j.contact_phone_types
-        || j.contact_address_types || j.data || [];
-      const map = {};
-      for (const item of arr) {
-        const id = item.id ?? item.value;
-        const label = item.name ?? item.label ?? item.text;
-        if (id !== undefined && label) map[id] = label;
+  // own lookup lists instead of guessing a mapping. The exact endpoint path
+  // isn't documented publicly, so we try several plausible names and use
+  // whichever one actually returns data — _debug_lookup_attempts in the
+  // response shows what was tried and what each one returned.
+  async function tryLookupPaths(paths) {
+    const attempts = [];
+    for (const path of paths) {
+      try {
+        const r = await fetch(`${REDTAIL_BASE}${path}`, {
+          headers: { Authorization: authHeader, Accept: 'application/json' },
+        });
+        if (!r.ok) {
+          attempts.push({ path, status: r.status, ok: false });
+          continue;
+        }
+        const j = await r.json();
+        const arr = Array.isArray(j) ? j
+          : j.phone_types || j.address_types || j.contact_phone_types
+          || j.contact_address_types || j.lists || j.data || [];
+        const map = {};
+        for (const item of (Array.isArray(arr) ? arr : [])) {
+          const id = item.id ?? item.value;
+          const label = item.name ?? item.label ?? item.text;
+          if (id !== undefined && label) map[id] = label;
+        }
+        const mapSize = Object.keys(map).length;
+        attempts.push({ path, status: r.status, ok: true, mapSize, sampleKeys: Object.keys(j).slice(0, 5) });
+        if (mapSize > 0) {
+          return { map, attempts };
+        }
+      } catch (e) {
+        attempts.push({ path, error: String(e) });
       }
-      return map;
-    } catch (e) {
-      return {};
     }
+    return { map: {}, attempts };
   }
 
-  const [phoneTypeMap, addressTypeMap] = await Promise.all([
-    fetchLookup('/lists/phone_types'),
-    fetchLookup('/lists/address_types'),
+  const PHONE_TYPE_PATHS = [
+    '/lists/phone_types', '/lists/contact_phone_types', '/lists/phonetypes',
+    '/lists/phone_type', '/phone_types',
+  ];
+  const ADDRESS_TYPE_PATHS = [
+    '/lists/address_types', '/lists/contact_address_types', '/lists/addresstypes',
+    '/lists/address_type', '/address_types',
+  ];
+  // Confirmed correct from your working bulk-updater project's
+  // LOOKUP_ENDPOINTS — no guessing needed for these two.
+  const GENDER_PATHS = ['/lists/genders'];
+  const MARITAL_STATUS_PATHS = ['/lists/marital_statuses'];
+
+  const [phoneResult, addressResult, genderResult, maritalResult] = await Promise.all([
+    tryLookupPaths(PHONE_TYPE_PATHS),
+    tryLookupPaths(ADDRESS_TYPE_PATHS),
+    tryLookupPaths(GENDER_PATHS),
+    tryLookupPaths(MARITAL_STATUS_PATHS),
   ]);
+  const phoneTypeMap = phoneResult.map;
+  const addressTypeMap = addressResult.map;
+  const genderListMap = genderResult.map;
+  const maritalListMap = maritalResult.map;
 
   try {
     const rtRes = await fetch(`${REDTAIL_BASE}/contacts/${contactId}`, {
@@ -104,7 +133,7 @@ export default async function handler(req, res) {
       res.status(rtRes.status).json({
         error: `Redtail returned HTTP ${rtRes.status}`,
         detail: text.slice(0, 500),
-        _version: '2026-09-25-v9',
+        _version: '2026-09-25-v11',
       });
       return;
     }
@@ -138,13 +167,11 @@ export default async function handler(req, res) {
       return '';
     };
 
-    // Gender and Marital Status come back from Redtail as numerical IDs
-    // (per your working integration): Gender 1 = Male, 2 = Female.
-    // Marital Status 1 = Married, 2 = Single, 3 = Divorced, 4 = Widowed.
-    // Some accounts may instead return an object ({id, name}) or a plain
-    // string — asText/asId below handle all three shapes.
-    const GENDER_MAP = { 1: 'Male', 2: 'Female' };
-    const MARITAL_MAP = { 1: 'Married', 2: 'Single', 3: 'Divorced', 4: 'Widowed' };
+    // Gender and Marital Status come back from Redtail as account-specific
+    // numerical IDs, so we look them up against the real lists fetched
+    // above (/lists/genders, /lists/marital_statuses) rather than guessing
+    // — the earlier hardcoded 1/2/3/4 guess was confirmed wrong for this
+    // account (ID 3 is "Married" here, not "Divorced").
 
     // Pull a numeric id out of a raw value, an object ({id,...}), or a
     // numeric string.
@@ -157,10 +184,10 @@ export default async function handler(req, res) {
     };
 
     const genderId = asId(contact.gender_id) ?? asId(contact.gender);
-    const genderText = GENDER_MAP[genderId] || asText(contact.gender) || '';
+    const genderText = (genderId !== null && genderListMap[genderId]) || asText(contact.gender) || '';
 
     const maritalId = asId(contact.marital_status_id) ?? asId(contact.marital_status);
-    const maritalText = MARITAL_MAP[maritalId] || asText(contact.marital_status) || '';
+    const maritalText = (maritalId !== null && maritalListMap[maritalId]) || asText(contact.marital_status) || '';
 
     // Normalize into the flat shape the widget expects
     const normalized = {
@@ -215,7 +242,16 @@ export default async function handler(req, res) {
       _debug_lookup_lists: {
         phone_type_map: phoneTypeMap,
         address_type_map: addressTypeMap,
+        gender_map: genderListMap,
+        marital_status_map: maritalListMap,
       },
+      _debug_lookup_attempts: {
+        phone: phoneResult.attempts,
+        address: addressResult.attempts,
+        gender: genderResult.attempts,
+        marital: maritalResult.attempts,
+      },
+      _debug_raw_contact_keys: Object.keys(contact),
     };
 
     res.status(200).json(normalized);
