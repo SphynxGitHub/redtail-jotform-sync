@@ -3,12 +3,13 @@
 // Vercel serverless function that looks up a Redtail contact by ID and
 // returns clean JSON for the JotForm widget to consume.
 //
-// Usage: GET /api/relay?value=12345&key=YOUR_REDTAIL_USERKEY
+// Usage: POST /api/relay  with JSON body { "value": "12345", "key": "APIKey:Password" }
 //
-// The Redtail Userkey is passed through from the JotForm widget setting
-// (RedtailAPIKey) rather than stored here, matching how the Wealthbox relay
-// worked. If you'd rather keep the key server-side only, see the note at
-// the bottom of this file.
+// The Redtail credentials come from the JotForm widget's own settings
+// (filled in per-form by whoever builds it in JotForm's widget builder),
+// same pattern as the Wealthbox relay — but sent as a POST body instead of
+// a URL query param so the key never lands in a URL, browser history, or
+// server access log.
 
 const REDTAIL_BASE = 'https://smf.crm3.redtailtechnology.com/api/public/v1';
 // !! VERIFY: "smf" is your firm's Redtail subdomain, taken from the bulk-
@@ -17,20 +18,25 @@ const REDTAIL_BASE = 'https://smf.crm3.redtailtechnology.com/api/public/v1';
 export default async function handler(req, res) {
   // CORS — JotForm embeds run on jotform.com / jotform domains
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') {
     res.status(200).end();
     return;
   }
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Use POST.' });
+    return;
+  }
 
-  const { value, key } = req.query;
+  const { value, key } = req.body || {};
 
   if (!value) {
     res.status(400).json({ error: 'Missing "value" (Redtail Contact ID).' });
     return;
   }
   if (!key) {
-    res.status(400).json({ error: 'Missing "key" (Redtail Userkey).' });
+    res.status(400).json({ error: 'Missing "key" (Redtail credentials, as "APIKey:Password").' });
     return;
   }
 
@@ -40,7 +46,10 @@ export default async function handler(req, res) {
     return;
   }
 
-  const authHeader = `Userkey userkey:${key}`;
+  // Redtail requires the Authorization value to be Base64-encoded, not
+  // plain text. `key` is passed in as "APIKey:Password" (colon-separated);
+  // we encode that pair here before sending it on.
+  const authHeader = `Userkey ${Buffer.from(key).toString('base64')}`;
 
   try {
     const rtRes = await fetch(`${REDTAIL_BASE}/contacts/${contactId}`, {
@@ -120,11 +129,9 @@ export default async function handler(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// NOTE on the API key: right now the Redtail Userkey is passed in on every
-// request from the JotForm widget setting, same pattern as your Wealthbox
-// relay. If you'd rather not have the key travel through the querystring
-// at all, store it as a Vercel environment variable (REDTAIL_USERKEY)
-// instead, drop the `key` query param, and read it with
-// `process.env.REDTAIL_USERKEY` here. That's more secure but means the key
-// is fixed per-deployment rather than per-widget-instance.
+// NOTE on the API key: the Redtail credentials are passed in on every
+// request from the JotForm widget's own settings (per-form, entered by
+// whoever builds the JotForm), same pattern as your Wealthbox relay — just
+// carried in the POST body instead of the URL so it never appears in a
+// query string, browser history, or access log.
 // ─────────────────────────────────────────────────────────────────────────
