@@ -1,5 +1,5 @@
 // api/relay.js
-// VERSION: 2026-09-25-v3 (raw API key, no colon pairing)
+// VERSION: 2026-09-25-v4 (raw key, no client-side base64 encoding)
 //
 // Vercel serverless function that looks up a Redtail contact by ID and
 // returns clean JSON for the JotForm widget to consume.
@@ -47,13 +47,12 @@ export default async function handler(req, res) {
     return;
   }
 
-  // TEMPORARY DEBUG — remove once auth is working. Logs shape only, never
-  // the actual secret, viewable in Vercel → Deployments → Functions logs.
+  // TEMPORARY DEBUG — remove once auth is working.
   console.log('DEBUG key received — length:', key.length);
 
-  // Redtail requires the Authorization value to be Base64-encoded. `key`
-  // is just the raw API key (no username/password pairing).
-  const authHeader = `Userkey ${Buffer.from(key).toString('base64')}`;
+  // TESTING: sending the key AS-IS (no re-encoding), in case Redtail issues
+  // API keys that are already Base64 — re-encoding would double-encode it.
+  const authHeader = `Userkey ${key}`;
 
   try {
     const rtRes = await fetch(`${REDTAIL_BASE}/contacts/${contactId}`, {
@@ -70,7 +69,7 @@ export default async function handler(req, res) {
       res.status(rtRes.status).json({
         error: `Redtail returned HTTP ${rtRes.status}`,
         detail: text.slice(0, 500),
-        _version: '2026-09-25-v3',
+        _version: '2026-09-25-v4',
       });
       return;
     }
