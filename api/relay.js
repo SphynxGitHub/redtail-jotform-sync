@@ -1,5 +1,5 @@
 // api/relay.js
-// VERSION: 2026-09-25-v6 (defensive string coercion for object-shaped fields)
+// VERSION: 2026-09-25-v7 (gender/marital status ID mapping, phone defensive coercion)
 //
 // Vercel serverless function that looks up a Redtail contact by ID and
 // returns clean JSON for the JotForm widget to consume.
@@ -69,7 +69,7 @@ export default async function handler(req, res) {
       res.status(rtRes.status).json({
         error: `Redtail returned HTTP ${rtRes.status}`,
         detail: text.slice(0, 500),
-        _version: '2026-09-25-v6',
+        _version: '2026-09-25-v7',
       });
       return;
     }
@@ -103,6 +103,30 @@ export default async function handler(req, res) {
       return '';
     };
 
+    // Gender and Marital Status come back from Redtail as numerical IDs
+    // (per your working integration): Gender 1 = Male, 2 = Female.
+    // Marital Status 1 = Married, 2 = Single, 3 = Divorced, 4 = Widowed.
+    // Some accounts may instead return an object ({id, name}) or a plain
+    // string — asText/asId below handle all three shapes.
+    const GENDER_MAP = { 1: 'Male', 2: 'Female' };
+    const MARITAL_MAP = { 1: 'Married', 2: 'Single', 3: 'Divorced', 4: 'Widowed' };
+
+    // Pull a numeric id out of a raw value, an object ({id,...}), or a
+    // numeric string.
+    const asId = (val) => {
+      if (val === null || val === undefined) return null;
+      if (typeof val === 'number') return val;
+      if (typeof val === 'object') return val.id ?? null;
+      if (typeof val === 'string' && /^\d+$/.test(val.trim())) return Number(val);
+      return null;
+    };
+
+    const genderId = asId(contact.gender_id) ?? asId(contact.gender);
+    const genderText = GENDER_MAP[genderId] || asText(contact.gender) || '';
+
+    const maritalId = asId(contact.marital_status_id) ?? asId(contact.marital_status);
+    const maritalText = MARITAL_MAP[maritalId] || asText(contact.marital_status) || '';
+
     // Normalize into the flat shape the widget expects
     const normalized = {
       id: contact.id,
@@ -114,6 +138,10 @@ export default async function handler(req, res) {
       job_title: asText(contact.job_title) || asText(contact.occupation),
       category_name: asText(contact.category_name) || asText(contact.category),
       status_name: asText(contact.status_name) || asText(contact.status),
+      gender: genderText,
+      gender_id: genderId,
+      marital_status: maritalText,
+      marital_status_id: maritalId,
       addresses: (contact.addresses || []).map(a => ({
         street_address: a.street_address || a.street_line_1 || '',
         street_address_2: a.street_address_2 || a.street_line_2 || '',
@@ -125,7 +153,7 @@ export default async function handler(req, res) {
         is_primary: !!(a.is_primary || a.primary),
       })),
       phones: (contact.phones || []).map(p => ({
-        number: p.number || p.phone || '',
+        number: asText(p.number) || asText(p.phone),
         phone_type: asText(p.phone_type) || asText(p.type) || asText(p.kind),
         is_primary: !!(p.is_primary || p.primary),
       })),
