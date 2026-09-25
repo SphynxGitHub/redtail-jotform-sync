@@ -274,8 +274,6 @@
                 }
 
                 JFCustomWidget.setFieldsValueByLabel(finalFields);
-                preview.innerHTML += `<hr><b>DEBUG — fields sent to JotForm:</b><pre>${JSON.stringify(finalFields, null, 2)}</pre>`;
-                JFCustomWidget.requestFrameResize({ height: 900 });
                 JFCustomWidget.sendData(fullLegalName);
             })
             .catch(err => {
