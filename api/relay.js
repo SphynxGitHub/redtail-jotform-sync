@@ -1,5 +1,5 @@
 // api/relay.js
-// VERSION: 2026-09-25-v7 (gender/marital status ID mapping, phone defensive coercion)
+// VERSION: 2026-09-25-v8 (dynamic phone/address type lookup from Redtail lists)
 //
 // Vercel serverless function that looks up a Redtail contact by ID and
 // returns clean JSON for the JotForm widget to consume.
@@ -53,6 +53,41 @@ export default async function handler(req, res) {
   // no Base64 encoding.
   const authHeader = key;
 
+  // ── Lookup lists ────────────────────────────────────────────────────────
+  // Address/phone "type" fields come back as raw numeric IDs, and those IDs
+  // are account-specific (not fixed system values), so we fetch Redtail's
+  // own lookup lists instead of guessing a mapping. Fetched fresh per
+  // request — small lists, cheap call, always accurate even if the account
+  // customizes them later.
+  async function fetchLookup(path) {
+    try {
+      const r = await fetch(`${REDTAIL_BASE}${path}`, {
+        headers: { Authorization: authHeader, Accept: 'application/json' },
+      });
+      if (!r.ok) return {};
+      const j = await r.json();
+      // Response shape varies by list — try common wrapper keys, else
+      // assume the body itself is the array.
+      const arr = Array.isArray(j) ? j
+        : j.phone_types || j.address_types || j.contact_phone_types
+        || j.contact_address_types || j.data || [];
+      const map = {};
+      for (const item of arr) {
+        const id = item.id ?? item.value;
+        const label = item.name ?? item.label ?? item.text;
+        if (id !== undefined && label) map[id] = label;
+      }
+      return map;
+    } catch (e) {
+      return {};
+    }
+  }
+
+  const [phoneTypeMap, addressTypeMap] = await Promise.all([
+    fetchLookup('/lists/phone_types'),
+    fetchLookup('/lists/address_types'),
+  ]);
+
   try {
     const rtRes = await fetch(`${REDTAIL_BASE}/contacts/${contactId}`, {
       method: 'GET',
@@ -69,7 +104,7 @@ export default async function handler(req, res) {
       res.status(rtRes.status).json({
         error: `Redtail returned HTTP ${rtRes.status}`,
         detail: text.slice(0, 500),
-        _version: '2026-09-25-v7',
+        _version: '2026-09-25-v8',
       });
       return;
     }
@@ -142,27 +177,41 @@ export default async function handler(req, res) {
       gender_id: genderId,
       marital_status: maritalText,
       marital_status_id: maritalId,
-      addresses: (contact.addresses || []).map(a => ({
-        street_address: a.street_address || a.street_line_1 || '',
-        street_address_2: a.street_address_2 || a.street_line_2 || '',
-        city: a.city || '',
-        state: asText(a.state),
-        zip: a.zip || a.zip_code || '',
-        country: asText(a.country),
-        address_type: asText(a.address_type) || asText(a.type) || asText(a.kind),
-        is_primary: !!(a.is_primary || a.primary),
-      })),
-      phones: (contact.phones || []).map(p => ({
-        number: asText(p.number) || asText(p.phone),
-        phone_type: asText(p.phone_type) || asText(p.type) || asText(p.kind),
-        is_primary: !!(p.is_primary || p.primary),
-      })),
+      addresses: (contact.addresses || []).map(a => {
+        const rawType = a.address_type ?? a.type ?? a.kind;
+        const typeId = asId(rawType);
+        const typeName = (typeId !== null && addressTypeMap[typeId]) || asText(rawType);
+        return {
+          street_address: a.street_address || a.street_line_1 || '',
+          street_address_2: a.street_address_2 || a.street_line_2 || '',
+          city: a.city || '',
+          state: asText(a.state),
+          zip: a.zip || a.zip_code || '',
+          country: asText(a.country),
+          address_type: typeName,
+          is_primary: !!(a.is_primary || a.primary),
+        };
+      }),
+      phones: (contact.phones || []).map(p => {
+        const rawType = p.phone_type ?? p.type ?? p.kind;
+        const typeId = asId(rawType);
+        const typeName = (typeId !== null && phoneTypeMap[typeId]) || asText(rawType);
+        return {
+          number: asText(p.number) || asText(p.phone),
+          phone_type: typeName,
+          is_primary: !!(p.is_primary || p.primary),
+        };
+      }),
       emails: (contact.emails || []).map(e => ({
         address: e.address || e.email || '',
         is_primary: !!(e.is_primary || e.primary),
       })),
       tags: contact.tags || [],
       custom_fields: contact.custom_fields || [],
+      _debug_lookup_lists: {
+        phone_type_map: phoneTypeMap,
+        address_type_map: addressTypeMap,
+      },
     };
 
     res.status(200).json(normalized);
