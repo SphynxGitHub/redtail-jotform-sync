@@ -46,9 +46,12 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Redtail requires the Authorization value to be Base64-encoded, not
-  // plain text. `key` is passed in as "APIKey:Password" (colon-separated);
-  // we encode that pair here before sending it on.
+  // TEMPORARY DEBUG — remove once auth is working. Logs shape only, never
+  // the actual secret, viewable in Vercel → Deployments → Functions logs.
+  console.log('DEBUG key received — length:', key.length);
+
+  // Redtail requires the Authorization value to be Base64-encoded. `key`
+  // is just the raw API key (no username/password pairing).
   const authHeader = `Userkey ${Buffer.from(key).toString('base64')}`;
 
   try {
