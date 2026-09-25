@@ -27,11 +27,13 @@
     <div id="preview"></div>
 
     <script>
-    let apiKey, rtSearchKey, fieldPrefix;
+    let apiKey, fieldPrefix;
 
+    // apiKey comes from the widget's own JotForm settings (RedtailAPIKey),
+    // filled in per-form in the widget builder. It's sent as a POST body
+    // field, never appended to the URL.
     JFCustomWidget.subscribe("ready", function(data) {
         apiKey = JFCustomWidget.getWidgetSetting('RedtailAPIKey');
-        rtSearchKey = JFCustomWidget.getWidgetSetting('RTField') || 'email';
         fieldPrefix = (JFCustomWidget.getWidgetSetting('FieldPrefix') || '').trim();
         JFCustomWidget.requestFrameResize({ height: 55 });
     });
@@ -79,7 +81,11 @@
         preview.style.display = "block";
         preview.innerHTML = "Syncing data...";
 
-        fetch(`${RELAY_URL}?value=${encodeURIComponent(val)}&search_by=${rtSearchKey}&key=${apiKey}&t=${Date.now()}`)
+        fetch(RELAY_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value: val, key: apiKey })
+        })
             .then(res => res.json())
             .then(contact => {
                 if (!contact || !contact.id) {
