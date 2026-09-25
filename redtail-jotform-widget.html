@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Redtail Smart Sync</title>
+    <script src="https://js.jotform.com/JotFormCustomWidget.min.js"></script>
+    <style>
+        body { font-family: "Inter", sans-serif; margin: 0; padding: 0; background: transparent; overflow: hidden; }
+        .search-container { display: flex; gap: 10px; align-items: center; width: 100%; }
+        input#lookupValue {
+            flex-grow: 1; padding: 10px 12px; border: 1px solid #b8bdc9; border-radius: 4px;
+            font-size: 16px; color: #2c3345; background-color: #fff; box-sizing: border-box;
+        }
+        input#lookupValue:focus { border-color: #2e69ff; outline: none; box-shadow: 0 0 0 2px rgba(46,105,255,0.25); }
+        button#searchBtn {
+            padding: 10px 20px; background: #0d6e4e; color: white; border: none; border-radius: 4px;
+            font-weight: 600; font-size: 14px; cursor: pointer; white-space: nowrap;
+        }
+        #preview { display: none; margin-top: 15px; font-size: 12px; background: #eefaf4; border: 1px solid #cbe8db; padding: 12px; border-radius: 6px; }
+        pre { background: #1e1e1e; color: #d4d4d4; padding: 10px; border-radius: 4px; overflow: auto; max-height: 250px; border-left: 4px solid #0d6e4e; }
+    </style>
+</head>
+<body>
+    <div class="search-container">
+        <input type="text" id="lookupValue" placeholder="Search Redtail...">
+        <button id="searchBtn" onclick="handleSearch()">Search</button>
+    </div>
+    <div id="preview"></div>
+
+    <script>
+    let apiKey, rtSearchKey, fieldPrefix;
+
+    JFCustomWidget.subscribe("ready", function(data) {
+        apiKey = JFCustomWidget.getWidgetSetting('RedtailAPIKey');
+        rtSearchKey = JFCustomWidget.getWidgetSetting('RTField') || 'email';
+        fieldPrefix = (JFCustomWidget.getWidgetSetting('FieldPrefix') || '').trim();
+        JFCustomWidget.requestFrameResize({ height: 55 });
+    });
+
+    // ── DATE NORMALIZER ───────────────────────────────────────────────────────
+    function normalizeDate(val) {
+        if (!val || typeof val !== 'string') return val;
+        const m = val.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (m) return `${m[2]}/${m[3]}/${m[1]}`;
+        return val;
+    }
+
+    // ── VALUE NORMALIZER ──────────────────────────────────────────────────────
+    const VALUE_MAP = {
+        "u.s. driver's license": "U.S. Drivers License",
+        "u.s. drivers license":  "U.S. Drivers License",
+        "us driver's license":   "U.S. Drivers License",
+        "us drivers license":    "U.S. Drivers License",
+        "u.s. passport":         "Passport",
+        "passport card":         "Passport Card",
+    };
+
+    function normalizeValue(val) {
+        if (!val || typeof val !== 'string') return val;
+        const dated = normalizeDate(val);
+        if (dated !== val) return dated;
+        const key = val.replace(/[\u2018\u2019\u02BC']/g, "'").toLowerCase().trim();
+        if (VALUE_MAP[key]) return VALUE_MAP[key];
+        return val.replace(/[\u2018\u2019\u02BC']/g, '');
+    }
+
+    function push(arr, label, value) {
+        if (!label || value === null || value === undefined || value === '') return;
+        arr.push({ label, value: normalizeValue(String(value)) });
+    }
+
+    // ── !! VERIFY: adjust RELAY_URL to your own Redtail relay endpoint once built ──
+    const RELAY_URL = 'https://YOUR-REDTAIL-RELAY-ENDPOINT/relay';
+
+    function handleSearch() {
+        const val = document.getElementById('lookupValue').value;
+        const preview = document.getElementById('preview');
+        if (!val || !apiKey) return;
+
+        preview.style.display = "block";
+        preview.innerHTML = "Syncing data...";
+
+        fetch(`${RELAY_URL}?value=${encodeURIComponent(val)}&search_by=${rtSearchKey}&key=${apiKey}&t=${Date.now()}`)
+            .then(res => res.json())
+            .then(contact => {
+                if (!contact || !contact.id) {
+                    preview.innerHTML = "No record found.";
+                    return;
+                }
+
+                preview.innerHTML = `<b style="color:#0d6e4e">✓ Found: ${contact.name || (contact.first_name + ' ' + contact.last_name)}</b><pre>${JSON.stringify(contact, null, 2)}</pre>`;
+                JFCustomWidget.requestFrameResize({ height: 450 });
+
+                const finalFields = [];
+                const pfx = (label) => fieldPrefix ? `${fieldPrefix} ${label.trim()}` : label.trim();
+
+                // ── !! VERIFY: Redtail's field names differ from Wealthbox's.
+                // Below assumes shapes like GET /contacts/{id} from the Redtail
+                // Contact Updater tool: addresses[], phones[], emails[],
+                // first_name/last_name, job_title, etc. Adjust to match what
+                // your relay actually returns. ──
+
+                // ── 1. ADDRESSES ──────────────────────────────────────────────
+                if (contact.addresses?.length > 0) {
+                    contact.addresses.forEach(addr => {
+                        const street1 = addr.street_address || '';
+                        const street2 = addr.street_address_2 || '';
+                        const city    = addr.city  || '';
+                        const state   = addr.state || '';
+                        const zip     = addr.zip   || '';
+                        const country = (addr.country && addr.country.trim()) ? addr.country.trim() : 'United States';
+                        const flat    = `${street1}, ${city}, ${state} ${zip}`;
+                        const kind    = (addr.address_type || '').toLowerCase();
+
+                        const targets = [];
+                        if (kind === 'home') targets.push(pfx('Home Address'));
+                        if (kind === 'business' || kind === 'work' || kind === 'office') {
+                            targets.push(pfx('Employer Address'));
+                            targets.push(pfx('Work Address'));
+                        }
+                        if (addr.is_primary === true) targets.push(pfx('Mailing Address'));
+                        if (targets.length === 0) targets.push(pfx('Address'));
+
+                        targets.forEach(lbl => {
+                            push(finalFields, lbl, flat);
+                            if (street2) {
+                                push(finalFields, pfx('Street Address Line 2'), street2);
+                                push(finalFields, pfx('Address Line 2'),        street2);
+                            }
+                            push(finalFields, pfx('Country'), country);
+                            push(finalFields, pfx('country'), country);
+                            push(finalFields, pfx('COUNTRY'), country);
+                        });
+                    });
+                }
+
+                // ── 2. PHONES ─────────────────────────────────────────────────
+                if (contact.phones?.length > 0) {
+                    let mobileCount = 0;
+                    contact.phones.forEach(p => {
+                        const num  = p.number;
+                        if (!num) return;
+                        const kind = (p.phone_type || '').toLowerCase();
+
+                        if (kind === 'mobile') {
+                            mobileCount++;
+                            if (mobileCount === 1) {
+                                push(finalFields, pfx('Mobile Phone Number'), num);
+                                push(finalFields, pfx('Mobile Phone'),        num);
+                                push(finalFields, pfx('Mobile'),              num);
+                            } else {
+                                push(finalFields, pfx(`Mobile Phone Number ${mobileCount}`), num);
+                            }
+                        }
+                        if (kind === 'home') {
+                            push(finalFields, pfx('Home Phone Number'), num);
+                            push(finalFields, pfx('Home Phone'),        num);
+                        }
+                        if (kind === 'business' || kind === 'work' || kind === 'office') {
+                            push(finalFields, pfx('Work Phone Number'), num);
+                            push(finalFields, pfx('Work Phone'),        num);
+                        }
+                        if (p.is_primary) {
+                            push(finalFields, pfx('Phone'),         num);
+                            push(finalFields, pfx('Phone Number'),  num);
+                            push(finalFields, pfx('Primary Phone'), num);
+                        }
+                    });
+                }
+
+                // ── 3. COMPLEX FIELDS ─────────────────────────────────────────
+                if (contact.custom_fields)
+                    contact.custom_fields.forEach(cf => {
+                        if (cf.value) push(finalFields, pfx(cf.name), cf.value);
+                    });
+
+                if (contact.job_title) {
+                    push(finalFields, pfx('Occupation'), contact.job_title);
+                    push(finalFields, pfx('Job Title'),  contact.job_title);
+                }
+
+                if (contact.category_name)
+                    push(finalFields, pfx('Category'), contact.category_name);
+                if (contact.status_name)
+                    push(finalFields, pfx('Status'), contact.status_name);
+
+                if (contact.tags?.length > 0)
+                    push(finalFields, pfx('Tags'), contact.tags.map(t => t.name || t).join(', '));
+
+                // ── 4. TOP-LEVEL TEXT FIELDS ──────────────────────────────────
+                for (let key in contact) {
+                    const value = contact[key];
+                    if (value && typeof value !== 'object' && value !== '') {
+                        const cleanKey = key.replace(/_/g, ' ');
+                        const tc = cleanKey.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                        push(finalFields, pfx(cleanKey),               value);
+                        push(finalFields, pfx(tc),                     value);
+                        push(finalFields, pfx(cleanKey.toUpperCase()), value);
+                    }
+                }
+
+                // ── 5. NAME FIELDS ────────────────────────────────────────────
+                const nameParts = [contact.prefix, contact.first_name, contact.middle_name,
+                                   contact.last_name, contact.suffix].filter(Boolean);
+                const fullLegalName = nameParts.join(' ');
+                const email = contact.emails?.[0]?.address || contact.email || null;
+
+                if (contact.first_name) {
+                    push(finalFields, pfx('First Name'),  contact.first_name);
+                    push(finalFields, pfx('First Name*'), contact.first_name);
+                }
+                if (contact.middle_name) {
+                    push(finalFields, pfx('Middle'),      contact.middle_name);
+                    push(finalFields, pfx('Middle Name'), contact.middle_name);
+                    push(finalFields, pfx('MI'), contact.middle_name);
+                }
+                if (contact.last_name) {
+                    push(finalFields, pfx('Last Name'),   contact.last_name);
+                    push(finalFields, pfx('Last Name*'),  contact.last_name);
+                }
+                push(finalFields, pfx('Full Name'), fullLegalName);
+                push(finalFields, pfx('Name'),      fullLegalName);
+
+                if (email) {
+                    push(finalFields, pfx('Email Address'),  email);
+                    push(finalFields, pfx('Email Address*'), email);
+                    push(finalFields, pfx('Email'),          email);
+                }
+
+                JFCustomWidget.setFieldsValueByLabel(finalFields);
+                JFCustomWidget.sendData(fullLegalName);
+            })
+            .catch(err => {
+                preview.innerHTML = "Error: " + err.message;
+            });
+    }
+    </script>
+</body>
+</html>
