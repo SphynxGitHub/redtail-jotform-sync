@@ -1,5 +1,5 @@
 // api/relay.js
-// VERSION: 2026-09-25-v5 (raw key as Authorization header, no scheme/encoding)
+// VERSION: 2026-09-25-v6 (defensive string coercion for object-shaped fields)
 //
 // Vercel serverless function that looks up a Redtail contact by ID and
 // returns clean JSON for the JotForm widget to consume.
@@ -69,7 +69,7 @@ export default async function handler(req, res) {
       res.status(rtRes.status).json({
         error: `Redtail returned HTTP ${rtRes.status}`,
         detail: text.slice(0, 500),
-        _version: '2026-09-25-v5',
+        _version: '2026-09-25-v6',
       });
       return;
     }
@@ -92,30 +92,41 @@ export default async function handler(req, res) {
       return;
     }
 
+    // Some Redtail fields (address_type, phone_type, job_title, category,
+    // status, etc.) can come back as either a plain string or an object
+    // like { id: 2, name: "Home" }, depending on account/list settings.
+    // This pulls a usable string out of either shape.
+    const asText = (val) => {
+      if (val === null || val === undefined) return '';
+      if (typeof val === 'string' || typeof val === 'number') return String(val);
+      if (typeof val === 'object') return val.name || val.label || val.value || '';
+      return '';
+    };
+
     // Normalize into the flat shape the widget expects
     const normalized = {
       id: contact.id,
       first_name: contact.first_name || '',
       middle_name: contact.middle_name || '',
       last_name: contact.last_name || '',
-      prefix: contact.prefix || contact.salutation || '',
-      suffix: contact.suffix || '',
-      job_title: contact.job_title || contact.occupation || '',
-      category_name: contact.category_name || contact.category || '',
-      status_name: contact.status_name || contact.status || '',
+      prefix: asText(contact.prefix) || asText(contact.salutation),
+      suffix: asText(contact.suffix),
+      job_title: asText(contact.job_title) || asText(contact.occupation),
+      category_name: asText(contact.category_name) || asText(contact.category),
+      status_name: asText(contact.status_name) || asText(contact.status),
       addresses: (contact.addresses || []).map(a => ({
         street_address: a.street_address || a.street_line_1 || '',
         street_address_2: a.street_address_2 || a.street_line_2 || '',
         city: a.city || '',
-        state: a.state || '',
+        state: asText(a.state),
         zip: a.zip || a.zip_code || '',
-        country: a.country || '',
-        address_type: a.address_type || a.type || a.kind || '',
+        country: asText(a.country),
+        address_type: asText(a.address_type) || asText(a.type) || asText(a.kind),
         is_primary: !!(a.is_primary || a.primary),
       })),
       phones: (contact.phones || []).map(p => ({
         number: p.number || p.phone || '',
-        phone_type: p.phone_type || p.type || p.kind || '',
+        phone_type: asText(p.phone_type) || asText(p.type) || asText(p.kind),
         is_primary: !!(p.is_primary || p.primary),
       })),
       emails: (contact.emails || []).map(e => ({
