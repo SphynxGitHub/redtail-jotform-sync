@@ -206,6 +206,23 @@
                     push(finalFields, pfx('Marital Status'), contact.marital_status);
                     push(finalFields, pfx('Marital'), contact.marital_status);
                 }
+                if (contact.nickname) {
+                    push(finalFields, pfx('Nickname'), contact.nickname);
+                    push(finalFields, pfx('Nick Name'), contact.nickname);
+                }
+                if (contact.dob) {
+                    push(finalFields, pfx('Date of Birth'), contact.dob);
+                    push(finalFields, pfx('DOB'), contact.dob);
+                    push(finalFields, pfx('Birthdate'), contact.dob);
+                }
+                if (contact.client_since) {
+                    push(finalFields, pfx('Client Since'), contact.client_since);
+                }
+                if (contact.anniversary) {
+                    push(finalFields, pfx('Anniversary'), contact.anniversary);
+                    push(finalFields, pfx('Marital Anniversary'), contact.anniversary);
+                    push(finalFields, pfx('Wedding Anniversary'), contact.anniversary);
+                }
 
                 if (contact.tags?.length > 0)
                     push(finalFields, pfx('Tags'), contact.tags.map(t => t.name || t).join(', '));
