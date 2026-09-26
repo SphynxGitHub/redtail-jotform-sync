@@ -188,6 +188,29 @@
                         if (cf.value) push(finalFields, pfx(cf.name), cf.value);
                     });
 
+                // Sub-resource lists (employments, assets, liabilities,
+                // identifications). Most forms only have room for the
+                // primary/most-recent entry, so we push the first item's
+                // fields directly by their own key names, and — for lists
+                // with more than one entry — also number subsequent ones
+                // (e.g. "Employer 2 Name") so nothing is silently dropped.
+                function pushListFields(list, singularLabel) {
+                    if (!Array.isArray(list)) return;
+                    list.forEach((item, idx) => {
+                        const n = idx === 0 ? '' : ` ${idx + 1}`;
+                        Object.keys(item).forEach(k => {
+                            if (item[k] === '' || item[k] === null || item[k] === undefined) return;
+                            const cleanKey = k.replace(/_/g, ' ');
+                            const tc = cleanKey.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                            push(finalFields, pfx(`${singularLabel}${n} ${tc}`), item[k]);
+                        });
+                    });
+                }
+                pushListFields(contact.employments, 'Employer');
+                pushListFields(contact.assets, 'Asset');
+                pushListFields(contact.liabilities, 'Liability');
+                pushListFields(contact.identifications, 'Identification');
+
                 if (contact.job_title) {
                     push(finalFields, pfx('Occupation'), contact.job_title);
                     push(finalFields, pfx('Job Title'),  contact.job_title);
