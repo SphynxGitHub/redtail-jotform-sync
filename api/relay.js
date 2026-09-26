@@ -300,6 +300,7 @@ export default async function handler(req, res) {
         name: cf.name || udfMap[cf.id] || `Custom Field ${cf.id}`,
         value: cf.value ?? cf.data ?? '',
       })),
+      _debug_udf_raw: udfValuesData,
       employments: employmentsArr.map(x => flattenScalars(x)),
       assets: unwrapArray(assetsData, 'assets', 'data').map(x => flattenScalars(x)),
       liabilities: unwrapArray(liabilitiesData, 'liabilities', 'data').map(x => flattenScalars(x)),
