@@ -211,6 +211,23 @@
                 pushListFields(contact.liabilities, 'Liability');
                 pushListFields(contact.identifications, 'Identification');
 
+                // Identifications also has its own specific field labels on
+                // this form (doesn't match the generic pattern above).
+                if (Array.isArray(contact.identifications) && contact.identifications.length > 0) {
+                    const id0 = contact.identifications[0];
+                    if (id0.number) push(finalFields, pfx('Identifications Number'), id0.number);
+                    if (id0.state) push(finalFields, pfx('Identifications State'), id0.state);
+                    if (id0.identification_type) push(finalFields, pfx('Identifications Type'), id0.identification_type);
+                    if (id0.issue_date) {
+                        push(finalFields, pfx('ID Issued Date'), id0.issue_date);
+                        push(finalFields, pfx('Identifications Issued Date'), id0.issue_date);
+                    }
+                    if (id0.expiration_date) {
+                        push(finalFields, pfx('ID Expires Date'), id0.expiration_date);
+                        push(finalFields, pfx('Identifications Expires Date'), id0.expiration_date);
+                    }
+                }
+
                 if (contact.source) {
                     push(finalFields, pfx('Source'), contact.source);
                     push(finalFields, pfx('Contact Source'), contact.source);
