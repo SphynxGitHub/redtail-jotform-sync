@@ -294,13 +294,12 @@ export default async function handler(req, res) {
       tags: contact.tags || [],
       custom_fields: unwrapArray(
         (contact.custom_fields && contact.custom_fields.length) ? contact.custom_fields : udfValuesData,
-        'custom_fields', 'udfs', 'data'
+        'custom_fields', 'contact_udfs', 'udfs', 'data'
       ).map(cf => ({
         id: cf.id,
-        name: cf.name || udfMap[cf.id] || `Custom Field ${cf.id}`,
-        value: cf.value ?? cf.data ?? '',
+        name: cf.contact_udf_field_name || cf.name || udfMap[cf.id] || `Custom Field ${cf.id}`,
+        value: cf.field_value ?? cf.value ?? cf.data ?? '',
       })),
-      _debug_udf_raw: udfValuesData,
       employments: employmentsArr.map(x => flattenScalars(x)),
       assets: unwrapArray(assetsData, 'assets', 'data').map(x => flattenScalars(x)),
       liabilities: unwrapArray(liabilitiesData, 'liabilities', 'data').map(x => flattenScalars(x)),
