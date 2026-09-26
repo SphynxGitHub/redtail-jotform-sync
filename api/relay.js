@@ -106,7 +106,7 @@ export default async function handler(req, res) {
       rtRes, udfMap,
       roleData, employmentsData, assetsData, liabilitiesData,
       taxData, identificationsData, personalProfileData, importantInfoData,
-      udfValuesData,
+      udfValuesData, samData,
     ] = await Promise.all([
       fetch(`${REDTAIL_BASE}/contacts/${contactId}`, {
         method: 'GET',
@@ -126,6 +126,7 @@ export default async function handler(req, res) {
       fetchJson(`/contacts/${contactId}/personal_profile`),
       fetchJson(`/contacts/${contactId}/important_information`),
       fetchJson(`/contacts/${contactId}/udfs`),
+      fetchJson(`/contacts/${contactId}/sam`),
     ]);
 
     const text = await rtRes.text();
@@ -232,6 +233,29 @@ export default async function handler(req, res) {
     if (roleObj.associate_advisor) passthrough.associate_advisor = asText(roleObj.associate_advisor);
     if (roleObj.csa) passthrough.csa = asText(roleObj.csa);
     if (roleObj.advisor) passthrough.advisor = asText(roleObj.advisor);
+
+    // Personal Profile: prefer the readable *_description fields over raw
+    // ids, and expose them unprefixed to match the form's actual labels
+    // ("Maiden Name", "Citizenship", "Country for Alien Citizenship").
+    const profileObj = unwrapSingle(personalProfileData);
+    if (profileObj.maiden_name) passthrough.maiden_name = asText(profileObj.maiden_name);
+    if (profileObj.citizenship_description) passthrough.citizenship = asText(profileObj.citizenship_description);
+    if (profileObj.alien_country) passthrough.country_for_alien_citizenship = asText(profileObj.alien_country);
+    if (profileObj.birth_place) passthrough.birth_place = asText(profileObj.birth_place);
+
+    // Strategic Allocation Model (SAM) — Time Horizon / Risk Tolerance /
+    // Objective, same "prefer the description field" treatment.
+    const samObj = unwrapSingle(samData);
+    if (samObj.time_horizon_description) passthrough.time_horizon = asText(samObj.time_horizon_description);
+    if (samObj.risk_tolerance_description) passthrough.risk_tolerance = asText(samObj.risk_tolerance_description);
+    if (samObj.objective) passthrough.investment_objective = asText(samObj.objective);
+
+    // Important Information is a free-text HTML note — strip tags for a
+    // clean plain-text value.
+    const importantInfoObj = unwrapSingle(importantInfoData);
+    if (importantInfoObj.content) {
+      passthrough.important_information = asText(importantInfoObj.content).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
 
     const employmentsArr = unwrapArray(employmentsData, 'employments', 'data');
     const primaryEmployment = employmentsArr[0] || null;
