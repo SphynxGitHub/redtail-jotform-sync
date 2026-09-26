@@ -106,6 +106,7 @@ export default async function handler(req, res) {
       rtRes, udfMap,
       roleData, employmentsData, assetsData, liabilitiesData,
       taxData, identificationsData, personalProfileData, importantInfoData,
+      udfValuesData,
     ] = await Promise.all([
       fetch(`${REDTAIL_BASE}/contacts/${contactId}`, {
         method: 'GET',
@@ -124,6 +125,7 @@ export default async function handler(req, res) {
       fetchJson(`/contacts/${contactId}/identifications?page=1`),
       fetchJson(`/contacts/${contactId}/personal_profile`),
       fetchJson(`/contacts/${contactId}/important_information`),
+      fetchJson(`/contacts/${contactId}/custom_fields`),
     ]);
 
     const text = await rtRes.text();
@@ -231,10 +233,8 @@ export default async function handler(req, res) {
     if (roleObj.csa) passthrough.csa = asText(roleObj.csa);
     if (roleObj.advisor) passthrough.advisor = asText(roleObj.advisor);
 
-    const primaryEmployment = Array.isArray(employmentsData?.employments) ? employmentsData.employments[0]
-      : Array.isArray(employmentsData) ? employmentsData[0]
-      : Array.isArray(employmentsData?.data) ? employmentsData.data[0]
-      : null;
+    const employmentsArr = unwrapArray(employmentsData, 'employments', 'data');
+    const primaryEmployment = employmentsArr[0] || null;
     if (primaryEmployment) {
       if (primaryEmployment.occupation) passthrough.occupation_name = primaryEmployment.occupation;
       if (primaryEmployment.occupation_start_date) passthrough.occupation_start_date = primaryEmployment.occupation_start_date;
@@ -292,12 +292,15 @@ export default async function handler(req, res) {
         is_primary: !!(e.is_primary || e.primary),
       })),
       tags: contact.tags || [],
-      custom_fields: (contact.custom_fields || []).map(cf => ({
+      custom_fields: unwrapArray(
+        (contact.custom_fields && contact.custom_fields.length) ? contact.custom_fields : udfValuesData,
+        'custom_fields', 'udfs', 'data'
+      ).map(cf => ({
         id: cf.id,
         name: cf.name || udfMap[cf.id] || `Custom Field ${cf.id}`,
         value: cf.value ?? cf.data ?? '',
       })),
-      employments: unwrapArray(employmentsData, 'employments', 'data').map(x => flattenScalars(x)),
+      employments: employmentsArr.map(x => flattenScalars(x)),
       assets: unwrapArray(assetsData, 'assets', 'data').map(x => flattenScalars(x)),
       liabilities: unwrapArray(liabilitiesData, 'liabilities', 'data').map(x => flattenScalars(x)),
       identifications: unwrapArray(identificationsData, 'identifications', 'data').map(x => flattenScalars(x)),
