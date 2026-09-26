@@ -222,6 +222,26 @@ export default async function handler(req, res) {
     Object.assign(passthrough, flattenScalars(unwrapSingle(personalProfileData), 'personal_profile'));
     Object.assign(passthrough, flattenScalars(unwrapSingle(importantInfoData), 'important_info'));
 
+    // A handful of fields match common Redtail form field names directly
+    // (as seen on the actual JotForm), better than the generic role_/
+    // employer-prefixed auto-labels — expose them unprefixed too so the
+    // widget's label matching hits on the first try.
+    const roleObj = unwrapSingle(roleData);
+    if (roleObj.associate_advisor) passthrough.associate_advisor = asText(roleObj.associate_advisor);
+    if (roleObj.csa) passthrough.csa = asText(roleObj.csa);
+    if (roleObj.advisor) passthrough.advisor = asText(roleObj.advisor);
+
+    const primaryEmployment = Array.isArray(employmentsData?.employments) ? employmentsData.employments[0]
+      : Array.isArray(employmentsData) ? employmentsData[0]
+      : Array.isArray(employmentsData?.data) ? employmentsData.data[0]
+      : null;
+    if (primaryEmployment) {
+      if (primaryEmployment.occupation) passthrough.occupation_name = primaryEmployment.occupation;
+      if (primaryEmployment.occupation_start_date) passthrough.occupation_start_date = primaryEmployment.occupation_start_date;
+      if (primaryEmployment.retirement_date) passthrough.retirement_date = primaryEmployment.retirement_date;
+      if (primaryEmployment.gai) passthrough.gross_annual_income = primaryEmployment.gai;
+    }
+
     // Normalize into the flat shape the widget expects. Passthrough fields
     // go first so the explicit overrides below (readable type names, nicer
     // fallbacks) win where both exist.
