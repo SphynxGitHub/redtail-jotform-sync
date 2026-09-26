@@ -125,7 +125,7 @@ export default async function handler(req, res) {
       fetchJson(`/contacts/${contactId}/identifications?page=1`),
       fetchJson(`/contacts/${contactId}/personal_profile`),
       fetchJson(`/contacts/${contactId}/important_information`),
-      fetchJson(`/contacts/${contactId}/custom_fields`),
+      fetchJson(`/contacts/${contactId}/udfs`),
     ]);
 
     const text = await rtRes.text();
