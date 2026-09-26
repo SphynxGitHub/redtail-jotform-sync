@@ -60,15 +60,71 @@ export default async function handler(req, res) {
 
   const authHeader = key;
 
+  // Generic authenticated GET, tolerant of 404s/errors — many contacts
+  // won't have data at every one of these sub-endpoints (financial info,
+  // identifications, etc.), and a missing one shouldn't break the whole
+  // lookup.
+  async function fetchJson(path) {
+    try {
+      const r = await fetch(`${REDTAIL_BASE}${path}`, {
+        headers: { Authorization: authHeader, Accept: 'application/json' },
+      });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Fetch the UDF (custom field) definitions — contact.custom_fields
+  // entries reference these by id and don't carry their own name.
+  async function fetchUdfMap() {
+    const j = await fetchJson('/lists/contact_udfs?page=1');
+    if (!j) return {};
+    const arr = Array.isArray(j) ? j : (j.udfs || j.data || j.items || []);
+    const map = {};
+    for (const item of (Array.isArray(arr) ? arr : [])) {
+      const id = item.id;
+      const name = item.name || item.label || item.description;
+      if (id !== undefined && name) map[id] = name;
+    }
+    return map;
+  }
+
+  // Pull the array out of whatever wrapper key a list-style endpoint uses.
+  function unwrapArray(j, ...keys) {
+    if (!j) return [];
+    if (Array.isArray(j)) return j;
+    for (const k of keys) if (Array.isArray(j[k])) return j[k];
+    // fall back: first array value found on the object
+    for (const v of Object.values(j)) if (Array.isArray(v)) return v;
+    return [];
+  }
+
   try {
-    const rtRes = await fetch(`${REDTAIL_BASE}/contacts/${contactId}`, {
-      method: 'GET',
-      headers: {
-        Authorization: authHeader,
-        Accept: 'application/json',
-        include: 'emails,addresses,phones,family,family.members',
-      },
-    });
+    const [
+      rtRes, udfMap,
+      roleData, employmentsData, assetsData, liabilitiesData,
+      taxData, identificationsData, personalProfileData, importantInfoData,
+    ] = await Promise.all([
+      fetch(`${REDTAIL_BASE}/contacts/${contactId}`, {
+        method: 'GET',
+        headers: {
+          Authorization: authHeader,
+          Accept: 'application/json',
+          include: 'emails,addresses,phones,family,family.members',
+        },
+      }),
+      fetchUdfMap(),
+      fetchJson(`/contacts/${contactId}/role`),
+      fetchJson(`/contacts/${contactId}/employments?page=1`),
+      fetchJson(`/contacts/${contactId}/assets`),
+      fetchJson(`/contacts/${contactId}/liabilities`),
+      fetchJson(`/contacts/${contactId}/tax`),
+      fetchJson(`/contacts/${contactId}/identifications?page=1`),
+      fetchJson(`/contacts/${contactId}/personal_profile`),
+      fetchJson(`/contacts/${contactId}/important_information`),
+    ]);
 
     const text = await rtRes.text();
 
@@ -114,8 +170,63 @@ export default async function handler(req, res) {
       return null;
     };
 
-    // Normalize into the flat shape the widget expects
+    // Pass through EVERY scalar (string/number/boolean) top-level field
+    // Redtail returns — not just a hand-picked list — so the widget's
+    // generic label-matching loop can pick up fields we haven't explicitly
+    // named (Contact Source, Servicing/Writing Advisor, Company Name, CSA,
+    // Occupation Start Date, etc.), same pattern as the Wealthbox relay.
+    const passthrough = {};
+    for (const k of Object.keys(contact)) {
+      const v = contact[k];
+      if (v === null || v === undefined) continue;
+      if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+        passthrough[k] = v;
+      } else if (typeof v === 'object' && !Array.isArray(v) && (v.name || v.label)) {
+        // e.g. { id: 2, name: "Home" } shaped fields — flatten to their text
+        passthrough[k] = v.name || v.label;
+      }
+    }
+
+    // Same scalar-flattening treatment for the single-object sub-endpoints
+    // (role, tax, personal_profile, important_information) — merged into
+    // the same passthrough bucket so the widget's generic loop can match
+    // them by label too, e.g. "Client Risk Tolerance" or "Client Tax Rate".
+    function unwrapSingle(j) {
+      if (!j) return {};
+      if (Array.isArray(j)) return j[0] || {};
+      const keys = Object.keys(j);
+      // If the payload is just one wrapper key holding an object, unwrap it
+      // (e.g. { role: {...} }, { tax_info: {...} }).
+      if (keys.length === 1 && typeof j[keys[0]] === 'object' && !Array.isArray(j[keys[0]])) {
+        return j[keys[0]] || {};
+      }
+      return j;
+    }
+    function flattenScalars(obj, prefix) {
+      const out = {};
+      for (const k of Object.keys(obj || {})) {
+        const v = obj[k];
+        if (v === null || v === undefined) continue;
+        const key = prefix ? `${prefix}_${k}` : k;
+        if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+          out[key] = v;
+        } else if (typeof v === 'object' && !Array.isArray(v) && (v.name || v.label)) {
+          out[key] = v.name || v.label;
+        }
+      }
+      return out;
+    }
+
+    Object.assign(passthrough, flattenScalars(unwrapSingle(roleData), 'role'));
+    Object.assign(passthrough, flattenScalars(unwrapSingle(taxData), 'tax'));
+    Object.assign(passthrough, flattenScalars(unwrapSingle(personalProfileData), 'personal_profile'));
+    Object.assign(passthrough, flattenScalars(unwrapSingle(importantInfoData), 'important_info'));
+
+    // Normalize into the flat shape the widget expects. Passthrough fields
+    // go first so the explicit overrides below (readable type names, nicer
+    // fallbacks) win where both exist.
     const normalized = {
+      ...passthrough,
       id: contact.id,
       first_name: contact.first_name || '',
       middle_name: contact.middle_name || '',
@@ -161,7 +272,15 @@ export default async function handler(req, res) {
         is_primary: !!(e.is_primary || e.primary),
       })),
       tags: contact.tags || [],
-      custom_fields: contact.custom_fields || [],
+      custom_fields: (contact.custom_fields || []).map(cf => ({
+        id: cf.id,
+        name: cf.name || udfMap[cf.id] || `Custom Field ${cf.id}`,
+        value: cf.value ?? cf.data ?? '',
+      })),
+      employments: unwrapArray(employmentsData, 'employments', 'data').map(x => flattenScalars(x)),
+      assets: unwrapArray(assetsData, 'assets', 'data').map(x => flattenScalars(x)),
+      liabilities: unwrapArray(liabilitiesData, 'liabilities', 'data').map(x => flattenScalars(x)),
+      identifications: unwrapArray(identificationsData, 'identifications', 'data').map(x => flattenScalars(x)),
     };
 
     res.status(200).json(normalized);
