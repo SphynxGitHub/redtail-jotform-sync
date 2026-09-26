@@ -237,6 +237,25 @@
                 if (contact.advisor) {
                     push(finalFields, pfx('Advisor'), contact.advisor);
                 }
+                if (contact.maiden_name) {
+                    push(finalFields, pfx('Maiden Name'), contact.maiden_name);
+                }
+                if (contact.citizenship) {
+                    push(finalFields, pfx('Citizenship'), contact.citizenship);
+                }
+                if (contact.country_for_alien_citizenship) {
+                    push(finalFields, pfx('Country for Alien Citizenship'), contact.country_for_alien_citizenship);
+                }
+                if (contact.time_horizon) {
+                    push(finalFields, pfx('Time Horizon'), contact.time_horizon);
+                }
+                if (contact.risk_tolerance) {
+                    push(finalFields, pfx('Risk Tolerance'), contact.risk_tolerance);
+                }
+                if (contact.important_information) {
+                    push(finalFields, pfx('Important Information'), contact.important_information);
+                    push(finalFields, pfx('Notes'), contact.important_information);
+                }
 
                 if (contact.job_title) {
                     push(finalFields, pfx('Occupation'), contact.job_title);
